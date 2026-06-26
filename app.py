@@ -5,29 +5,19 @@ import moviepy.editor as mpy
 import tempfile
 import os
 import random
-import requests
-from io import BytesIO
 
 # ---------- Настройка шрифта ----------
 FONT_SIZE = 90
-FONT_URL = "https://github.com/google/fonts/raw/main/ofl/montserrat/static/Montserrat-Bold.ttf"
-FONT_PATH = "Montserrat-Bold.ttf"
+FONT_PATH = "Montserrat-Bold.ttf"  # файл лежит рядом с app.py
 
-def download_font():
-    if not os.path.exists(FONT_PATH):
-        r = requests.get(FONT_URL)
-        if r.status_code == 200:
-            with open(FONT_PATH, "wb") as f:
-                f.write(r.content)
-        else:
-            st.error("Не удалось загрузить шрифт Montserrat Bold.")
-            st.stop()
+if not os.path.exists(FONT_PATH):
+    st.error(f"Файл шрифта '{FONT_PATH}' не найден. Добавьте его в репозиторий.")
+    st.stop()
 
-download_font()
 try:
     font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
 except IOError:
-    st.error("Файл шрифта повреждён или не найден.")
+    st.error("Не удалось загрузить шрифт из локального файла.")
     st.stop()
 
 # ---------- Параметры ячеек и фона ----------
@@ -57,16 +47,15 @@ def generate_sequences(target_word, alphabet, base_duration, fps):
     """
     Для каждой позиции создаём список случайных символов.
     Длина списка = N_i (случайное целое), последний символ = target_word[i].
-    N_i для соседей различаются (повторная генерация при совпадении).
+    N_i для соседей различаются.
     """
     total_frames = int(base_duration * fps)
-    # Минимальное число смен = 5, максимальное = total_frames // 2 (чтобы было заметно)
     min_switches = 5
     max_switches = max(min_switches + 1, total_frames // 3)
     N = []
     for i in range(COLS):
         if target_word[i] == ' ':
-            N.append(0)  # не используется
+            N.append(0)
             continue
         while True:
             candidate = random.randint(min_switches, max_switches)
@@ -138,53 +127,42 @@ if generate_btn:
         st.stop()
 
     fps = 30
-    # Суммарное время
     total = 2*(t1 + t2 + t3) + t4
 
-    # Заранее генерируем последовательности для трёх вращений
-    spin_data = []  # (duration, target_word, N_list, sequences)
+    spin_data = []
     target_words = [word2, word3, word4]
     spin_durations = [t1, t2, t3]
     for dur, tw in zip(spin_durations, target_words):
         N, seq = generate_sequences(tw, alphabet, dur, fps)
         spin_data.append((dur, tw, N, seq))
 
-    # Точки смены фаз
     t0 = t1
     t1_end = t0 + t1
     t2_end = t1_end + t2
     t3_end = t2_end + t2
     t4_end = t3_end + t3
     t5_end = t4_end + t3
-    t6_end = t5_end + t4   # total
+    t6_end = t5_end + t4
 
     def make_frame(t):
-        # Определяем фазу
         if t < t0:
-            # статика 1
-            word = words[0]
-            return draw_frame(list(word))
+            return draw_frame(list(words[0]))
         elif t < t1_end:
-            # вращение к word2
             spin_idx = 0
             t_spin = t - t0
         elif t < t2_end:
-            word = words[1]
-            return draw_frame(list(word))
+            return draw_frame(list(words[1]))
         elif t < t3_end:
             spin_idx = 1
             t_spin = t - t2_end
         elif t < t4_end:
-            word = words[2]
-            return draw_frame(list(word))
+            return draw_frame(list(words[2]))
         elif t < t5_end:
             spin_idx = 2
             t_spin = t - t4_end
         else:
-            word = words[3]
-            return draw_frame(list(word))
+            return draw_frame(list(words[3]))
 
-        # Обработка вращения
         dur, target, N_list, sequences = spin_data[spin_idx]
         display = []
         for i in range(COLS):
@@ -193,8 +171,7 @@ if generate_btn:
             else:
                 seq = sequences[i]
                 n = N_list[i]
-                # Индекс в зависимости от времени
-                idx = min(int(t_spin * fps / (dur * fps) * n), n - 1) if n>0 else 0
+                idx = min(int(t_spin * fps / (dur * fps) * n), n - 1) if n > 0 else 0
                 display.append(seq[idx])
         return draw_frame(display)
 
