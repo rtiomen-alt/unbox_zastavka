@@ -93,11 +93,9 @@ def generate_spin_params(target_word, alphabet, spin_duration, fps):
 
 # ---------- Кадр вращения с обрезкой ----------
 def draw_spin_frame(t_spin, pools, speeds, target_word, last_frame=False):
-    # Если last_frame=True, показываем первую букву следующего слова во всех непустых ячейках
+    # Если last_frame=True, показываем полное целевое слово (все буквы на своих местах)
     if last_frame:
-        first_char = target_word[0] if target_word[0] != ' ' else ' '
-        display_word = ''.join([first_char if target_word[i] != ' ' else ' ' for i in range(COLS)])
-        return draw_static_frame(display_word)
+        return draw_static_frame(target_word)
 
     img = Image.new("RGB", (WIDTH, HEIGHT), BLACK)
     for i in range(COLS):
@@ -126,7 +124,7 @@ def draw_spin_frame(t_spin, pools, speeds, target_word, last_frame=False):
 
 # ---------- Интерфейс Streamlit ----------
 st.set_page_config(page_title="Slot Video Generator", layout="wide")
-st.title("🎰 Генератор видео с барабаном (финал – первая буква)")
+st.title("🎰 Генератор видео с барабаном (все буквы фиксируются)")
 
 with st.sidebar:
     st.header("Надписи (до 11 символов)")
@@ -206,7 +204,7 @@ if generate_btn:
         # Статика 4 (конец)
         return draw_static_frame(words[3])
 
-    with st.spinner("Генерируем видео с акцентом на первую букву..."):
+    with st.spinner("Генерируем видео с обрезанной анимацией..."):
         clip = mpy.VideoClip(make_frame, duration=total_duration)
         tmpfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         clip.write_videofile(
@@ -227,6 +225,6 @@ if generate_btn:
     st.download_button(
         label="📥 Скачать MP4",
         data=video_bytes,
-        file_name="slot_first_char_final.mp4",
+        file_name="slot_correct_final.mp4",
         mime="video/mp4"
     )
