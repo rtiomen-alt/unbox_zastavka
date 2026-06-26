@@ -5,6 +5,7 @@ import moviepy.editor as mpy
 import tempfile
 import os
 import random
+from io import BytesIO
 
 # ---------- Шрифт ----------
 FONT_SIZE = 90
@@ -29,6 +30,14 @@ TOP = (HEIGHT - CELL_H) // 2
 
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
+
+# ---------- Инициализация session_state для изображений ----------
+if "img_slots" not in st.session_state:
+    st.session_state.img_slots = [
+        {"file": None, "word_idx": 0, "cell_idx": 0, "scale": 1.0, "offset_x": 0, "offset_y": 0},
+        {"file": None, "word_idx": 0, "cell_idx": 1, "scale": 1.0, "offset_x": 0, "offset_y": 0},
+        {"file": None, "word_idx": 0, "cell_idx": 2, "scale": 1.0, "offset_x": 0, "offset_y": 0},
+    ]
 
 def is_letter(ch):
     """Заглавная латиница или кириллица (включая Ё)."""
@@ -58,26 +67,56 @@ def draw_cell(cell_img, ch, y_rel, is_letter_char):
         y_center = y_rel + CELL_H / 2
         draw.text((x_center, y_center), ch, font=font, fill=WHITE, anchor='mm')
 
+def draw_image_on_cell(cell_img, pil_img, scale, offset_x, offset_y):
+    """Рисует PIL-изображение на cell_img с учетом масштаба и смещения."""
+    if pil_img is None:
+        return
+    # Вписываем в ячейку с сохранением пропорций, затем применяем scale
+    img_w, img_h = pil_img.size
+    # Размеры ячейки как доступное пространство
+    avail_w = CELL_W * scale
+    avail_h = CELL_H * scale
+    ratio = min(avail_w / img_w, avail_h / img_h)
+    new_w = int(img_w * ratio)
+    new_h = int(img_h * ratio)
+    resized = pil_img.resize((new_w, new_h), Image.LANCZOS)
+    # Позиция: центр ячейки + смещение
+    x = (CELL_W - new_w) // 2 + offset_x
+    y = (CELL_H - new_h) // 2 + offset_y
+    # Если PNG с прозрачностью, используем альфа-композит
+    if resized.mode == 'RGBA':
+        cell_img.paste(resized, (x, y), resized)
+    else:
+        cell_img.paste(resized, (x, y))
+
 # ---------- Статический кадр ----------
-def draw_static_frame(word):
+def draw_static_frame(word, word_idx, image_map):
     img = Image.new("RGB", (WIDTH, HEIGHT), BLACK)
     for i, ch in enumerate(word):
-        if ch == ' ':
-            continue
-        cell_img = Image.new("RGB", (CELL_W, CELL_H), BLACK)
-        draw_cell(cell_img, ch, y_rel=0, is_letter_char=is_letter(ch))
+        # Проверяем, есть ли изображение для этой надписи и ячейки
+        img_key = (word_idx, i)
+        if img_key in image_map:
+            cell_img = Image.new("RGB", (CELL_W, CELL_H), BLACK)
+            pil_img, scale, off_x, off_y = image_map[img_key]
+            draw_image_on_cell(cell_img, pil_img, scale, off_x, off_y)
+        else:
+            if ch == ' ':
+                continue
+            cell_img = Image.new("RGB", (CELL_W, CELL_H), BLACK)
+            draw_cell(cell_img, ch, y_rel=0, is_letter_char=is_letter(ch))
         x0 = LEFT + i * CELL_W
         img.paste(cell_img, (x0, TOP))
     return np.array(img)
 
 # ---------- Параметры скроллинга ----------
-def generate_spin_params(target_word, alphabet, spin_duration, fps):
+def generate_spin_params(target_word, alphabet, spin_duration, fps, image_map, target_word_idx):
     v_min = 2 * CELL_H / spin_duration
     v_max = 5 * CELL_H / spin_duration
     pools = []
     speeds = []
     for i in range(COLS):
-        if target_word[i] == ' ':
+        # Если в целевой надписи в этой ячейке изображение, скроллинг не нужен
+        if (target_word_idx, i) in image_map or target_word[i] == ' ':
             pools.append([])
             speeds.append(0.0)
             continue
@@ -85,24 +124,31 @@ def generate_spin_params(target_word, alphabet, spin_duration, fps):
         pools.append(pool)
         for _ in range(100):
             v = random.uniform(v_min, v_max)
-            if i > 0 and target_word[i-1] != ' ' and abs(v - speeds[i-1]) < 0.3 * (v_max - v_min):
-                continue
+            if i > 0 and target_word[i-1] != ' ' and (target_word_idx, i-1) not in image_map:
+                if abs(v - speeds[i-1]) < 0.3 * (v_max - v_min):
+                    continue
             break
         speeds.append(v)
     return pools, speeds
 
 # ---------- Кадр вращения с обрезкой ----------
-def draw_spin_frame(t_spin, pools, speeds, target_word, last_frame=False):
-    # Если last_frame=True, показываем полное целевое слово (все буквы на своих местах)
+def draw_spin_frame(t_spin, pools, speeds, target_word, last_frame=False,
+                    target_word_idx=None, image_map=None):
     if last_frame:
-        return draw_static_frame(target_word)
+        # В последнем кадре показываем полное целевое слово с изображениями
+        return draw_static_frame(target_word, target_word_idx, image_map)
 
     img = Image.new("RGB", (WIDTH, HEIGHT), BLACK)
     for i in range(COLS):
+        # Если в целевой надписи в этой ячейке изображение, пропускаем (оставляем чёрную)
+        if (target_word_idx, i) in image_map:
+            continue
         if target_word[i] == ' ':
             continue
         pool = pools[i]
         speed = speeds[i]
+        if not pool:  # не должно случиться, но на всякий случай
+            continue
 
         offset = (t_spin * speed) % (len(pool) * CELL_H)
         idx = int(offset // CELL_H) % len(pool)
@@ -124,7 +170,7 @@ def draw_spin_frame(t_spin, pools, speeds, target_word, last_frame=False):
 
 # ---------- Интерфейс Streamlit ----------
 st.set_page_config(page_title="Slot Video Generator", layout="wide")
-st.title("🎰 Генератор видео с барабаном (все буквы фиксируются)")
+st.title("🎰 Генератор видео с барабаном и изображениями")
 
 with st.sidebar:
     st.header("Надписи (до 11 символов)")
@@ -139,6 +185,60 @@ with st.sidebar:
     t3 = st.number_input("Показ 3-й надписи", min_value=0.5, value=2.0, step=0.5)
     t4 = st.number_input("Показ 4-й надписи", min_value=0.5, value=2.0, step=0.5)
 
+    # Блок изображений
+    with st.expander("🖼️ Изображения в ячейках (до 3)"):
+        for slot in range(3):
+            st.markdown(f"**Слот {slot+1}**")
+            uploaded = st.file_uploader(
+                "PNG изображение",
+                type=["png"],
+                key=f"img_uploader_{slot}",
+                help="Загрузите PNG (с прозрачностью или без)"
+            )
+            # Если файл загружен, сохраняем в session_state
+            if uploaded is not None:
+                st.session_state.img_slots[slot]["file"] = Image.open(uploaded).convert("RGBA")
+            else:
+                st.session_state.img_slots[slot]["file"] = None
+
+            col1, col2 = st.columns(2)
+            with col1:
+                word_choice = st.selectbox(
+                    "Надпись",
+                    options=[1, 2, 3, 4],
+                    index=st.session_state.img_slots[slot]["word_idx"],
+                    key=f"img_word_{slot}"
+                )
+                cell_choice = st.number_input(
+                    "Ячейка (1–11)",
+                    min_value=1, max_value=11,
+                    value=st.session_state.img_slots[slot]["cell_idx"] + 1,
+                    key=f"img_cell_{slot}"
+                ) - 1  # внутреннее представление 0..10
+            with col2:
+                scale = st.slider(
+                    "Масштаб",
+                    min_value=0.3, max_value=2.5, value=st.session_state.img_slots[slot]["scale"],
+                    step=0.1, key=f"img_scale_{slot}"
+                )
+                off_x = st.slider(
+                    "Смещение X (px)",
+                    min_value=-20, max_value=20, value=st.session_state.img_slots[slot]["offset_x"],
+                    step=1, key=f"img_offx_{slot}"
+                )
+                off_y = st.slider(
+                    "Смещение Y (px)",
+                    min_value=-20, max_value=20, value=st.session_state.img_slots[slot]["offset_y"],
+                    step=1, key=f"img_offy_{slot}"
+                )
+
+            # Обновляем параметры в session_state
+            st.session_state.img_slots[slot]["word_idx"] = word_choice - 1
+            st.session_state.img_slots[slot]["cell_idx"] = cell_choice
+            st.session_state.img_slots[slot]["scale"] = scale
+            st.session_state.img_slots[slot]["offset_x"] = off_x
+            st.session_state.img_slots[slot]["offset_y"] = off_y
+
     generate_btn = st.button("✨ Создать видео", type="primary")
 
 if generate_btn:
@@ -149,15 +249,25 @@ if generate_btn:
         st.error("Нет ни одного символа для вращения (все ячейки пустые).")
         st.stop()
 
+    # Собираем map изображений из session_state
+    image_map = {}
+    for slot in st.session_state.img_slots:
+        if slot["file"] is not None:
+            key = (slot["word_idx"], slot["cell_idx"])
+            # Если на одной позиции несколько слотов – последний перезапишет
+            image_map[key] = (slot["file"], slot["scale"], slot["offset_x"], slot["offset_y"])
+
     fps = 30
     total_duration = 2 * (t1 + t2 + t3) + t4
 
+    # Параметры для трёх фаз вращения
     spin_params = []
     target_words = [word2, word3, word4]
+    target_indices = [1, 2, 3]   # индексы слов
     spin_durations = [t1, t2, t3]
-    for dur, tw in zip(spin_durations, target_words):
-        pools, speeds = generate_spin_params(tw, alphabet, dur, fps)
-        spin_params.append((pools, speeds, tw, dur))
+    for dur, tw, tw_idx in zip(spin_durations, target_words, target_indices):
+        pools, speeds = generate_spin_params(tw, alphabet, dur, fps, image_map, tw_idx)
+        spin_params.append((pools, speeds, tw, dur, tw_idx))
 
     t0 = t1
     t1_end = t0 + t1
@@ -170,41 +280,44 @@ if generate_btn:
     def make_frame(t):
         # Статика 1
         if t < t0:
-            return draw_static_frame(words[0])
+            return draw_static_frame(words[0], 0, image_map)
 
         # Вращение 1 -> word2
         if t < t1_end:
-            pools, speeds, tw, dur = spin_params[0]
+            pools, speeds, tw, dur, tw_idx = spin_params[0]
             t_spin = t - t0
             last = (t >= t1_end - 1.0 / fps)
-            return draw_spin_frame(t_spin, pools, speeds, tw, last_frame=last)
+            return draw_spin_frame(t_spin, pools, speeds, tw, last_frame=last,
+                                   target_word_idx=tw_idx, image_map=image_map)
 
         # Статика 2
         if t < t2_end:
-            return draw_static_frame(words[1])
+            return draw_static_frame(words[1], 1, image_map)
 
         # Вращение 2 -> word3
         if t < t3_end:
-            pools, speeds, tw, dur = spin_params[1]
+            pools, speeds, tw, dur, tw_idx = spin_params[1]
             t_spin = t - t2_end
             last = (t >= t3_end - 1.0 / fps)
-            return draw_spin_frame(t_spin, pools, speeds, tw, last_frame=last)
+            return draw_spin_frame(t_spin, pools, speeds, tw, last_frame=last,
+                                   target_word_idx=tw_idx, image_map=image_map)
 
         # Статика 3
         if t < t4_end:
-            return draw_static_frame(words[2])
+            return draw_static_frame(words[2], 2, image_map)
 
         # Вращение 3 -> word4
         if t < t5_end:
-            pools, speeds, tw, dur = spin_params[2]
+            pools, speeds, tw, dur, tw_idx = spin_params[2]
             t_spin = t - t4_end
             last = (t >= t5_end - 1.0 / fps)
-            return draw_spin_frame(t_spin, pools, speeds, tw, last_frame=last)
+            return draw_spin_frame(t_spin, pools, speeds, tw, last_frame=last,
+                                   target_word_idx=tw_idx, image_map=image_map)
 
         # Статика 4 (конец)
-        return draw_static_frame(words[3])
+        return draw_static_frame(words[3], 3, image_map)
 
-    with st.spinner("Генерируем видео с обрезанной анимацией..."):
+    with st.spinner("Генерируем видео с изображениями..."):
         clip = mpy.VideoClip(make_frame, duration=total_duration)
         tmpfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         clip.write_videofile(
@@ -225,6 +338,6 @@ if generate_btn:
     st.download_button(
         label="📥 Скачать MP4",
         data=video_bytes,
-        file_name="slot_correct_final.mp4",
+        file_name="slot_with_images.mp4",
         mime="video/mp4"
     )
