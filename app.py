@@ -21,7 +21,6 @@ def get_available_fonts():
 
 available_fonts = get_available_fonts()
 
-# Инициализация выбранного шрифта в session_state
 if "selected_font" not in st.session_state:
     st.session_state.selected_font = list(available_fonts.keys())[0]
 
@@ -115,7 +114,6 @@ def draw_frame_from_list(display_chars, image_map=None, word_idx=None):
         img.paste(cell_img, (x0, TOP))
     return np.array(img)
 
-# Удобная обёртка для статического слова
 def draw_static_frame(word, word_idx, image_map):
     return draw_frame_from_list(list(word), image_map, word_idx)
 
@@ -225,20 +223,21 @@ def generate_preview(word, cell_idx, pil_img, scale, off_x, off_y):
     left_idx = cell_idx - 1
     if 0 <= left_idx < COLS and word[left_idx] != ' ':
         cell_img = Image.new("RGB", (CELL_W, CELL_H), BLACK)
-        draw_cell(cell_img, word[left_idx], y_rel=0, is_letter(word[left_idx]))
+        # Исправлено: все аргументы позиционные
+        draw_cell(cell_img, word[left_idx], 0, is_letter(word[left_idx]))
         preview.paste(cell_img, (0, 0))
     # Центральная ячейка
     cell_img = Image.new("RGB", (CELL_W, CELL_H), BLACK)
     if pil_img is not None:
         draw_image_on_cell(cell_img, pil_img, scale, off_x, off_y)
     elif cell_idx < COLS and word[cell_idx] != ' ':
-        draw_cell(cell_img, word[cell_idx], y_rel=0, is_letter(word[cell_idx]))
+        draw_cell(cell_img, word[cell_idx], 0, is_letter(word[cell_idx]))
     preview.paste(cell_img, (CELL_W, 0))
     # Правая ячейка
     right_idx = cell_idx + 1
     if 0 <= right_idx < COLS and word[right_idx] != ' ':
         cell_img = Image.new("RGB", (CELL_W, CELL_H), BLACK)
-        draw_cell(cell_img, word[right_idx], y_rel=0, is_letter(word[right_idx]))
+        draw_cell(cell_img, word[right_idx], 0, is_letter(word[right_idx]))
         preview.paste(cell_img, (2 * CELL_W, 0))
     return preview
 
@@ -273,7 +272,6 @@ with st.sidebar:
 
     # Изображения
     with st.expander("🖼️ Изображения в ячейках (до 6)"):
-        # Подготовка текущих слов для превью
         words_ui = [word1, word2, word3, word4]
         for slot in range(6):
             st.markdown(f"**Слот {slot+1}**")
@@ -331,14 +329,13 @@ with st.sidebar:
 
             # Превью
             pil_img = st.session_state.img_slots[slot]["file"]
-            word_for_preview = words_ui[word_choice - 1]  # слово, к которому привязан слот
+            word_for_preview = words_ui[word_choice - 1]
             preview_img = generate_preview(
                 word_for_preview,
                 cell_choice,
                 pil_img,
                 scale, off_x, off_y
             )
-            # Увеличиваем для наглядности в 3 раза
             preview_img = preview_img.resize((3 * CELL_W * 2, CELL_H * 2), Image.NEAREST)
             st.image(preview_img, caption=f"Предпросмотр: {word_for_preview} (ячейка {cell_choice+1})", width=3*CELL_W*2)
 
@@ -352,7 +349,6 @@ if generate_btn:
         st.error("Нет ни одного символа для вращения (все ячейки пустые).")
         st.stop()
 
-    # Собираем карту изображений
     image_map = {}
     for slot in st.session_state.img_slots:
         if slot["file"] is not None:
@@ -362,7 +358,6 @@ if generate_btn:
     fps = 30
     total_duration = 2 * (t1 + t2 + t3) + t4
 
-    # Параметры для трёх фаз вращения
     spin_params = []
     target_words = [word2, word3, word4]
     target_indices = [1, 2, 3]
@@ -371,7 +366,7 @@ if generate_btn:
         if mode == "барабан":
             pools, speeds = generate_spin_params(tw, alphabet, dur, fps, image_map, tw_idx)
             spin_params.append(("scroll", pools, speeds, tw, dur, tw_idx))
-        else:  # "смена"
+        else:
             N, seqs = generate_switch_sequences(tw, alphabet, dur, fps, image_map, tw_idx)
             spin_params.append(("switch", N, seqs, tw, dur, tw_idx))
 
@@ -384,11 +379,9 @@ if generate_btn:
     t6_end = t5_end + t4
 
     def make_frame(t):
-        # Статика 1
         if t < t0:
             return draw_static_frame(words[0], 0, image_map)
 
-        # Вращение 1 -> word2
         if t < t1_end:
             entry = spin_params[0]
             t_spin = t - t0
@@ -400,11 +393,9 @@ if generate_btn:
                 _, N, seqs, tw, dur, tw_idx = entry
                 return draw_switch_frame(t_spin, seqs, N, tw, last, tw_idx, image_map, dur, fps)
 
-        # Статика 2
         if t < t2_end:
             return draw_static_frame(words[1], 1, image_map)
 
-        # Вращение 2 -> word3
         if t < t3_end:
             entry = spin_params[1]
             t_spin = t - t2_end
@@ -416,11 +407,9 @@ if generate_btn:
                 _, N, seqs, tw, dur, tw_idx = entry
                 return draw_switch_frame(t_spin, seqs, N, tw, last, tw_idx, image_map, dur, fps)
 
-        # Статика 3
         if t < t4_end:
             return draw_static_frame(words[2], 2, image_map)
 
-        # Вращение 3 -> word4
         if t < t5_end:
             entry = spin_params[2]
             t_spin = t - t4_end
@@ -432,7 +421,6 @@ if generate_btn:
                 _, N, seqs, tw, dur, tw_idx = entry
                 return draw_switch_frame(t_spin, seqs, N, tw, last, tw_idx, image_map, dur, fps)
 
-        # Статика 4 (конец)
         return draw_static_frame(words[3], 3, image_map)
 
     with st.spinner("Генерируем видео..."):
